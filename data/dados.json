@@ -1,0 +1,15 @@
+{
+  "date": "2025-07-19",
+  "confirmations": [
+    {
+      "verified": true,
+      "timestamp": "2025-07-19T15:54:50.225Z",
+      "user": "teste:bf48ce7f-9af0-44e8-a566-9d8d44c089aa"
+    },
+    {
+      "verified": true,
+      "timestamp": "2025-07-19T16:12:38.377Z",
+      "user": "Vinicius:147effbc-cea1-4a69-9e33-3fd4ad0a02bd"
+    }
+  ]
+}

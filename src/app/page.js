@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 
 const STORAGE_KEY = "usuario_info";
-const JSONBIN_ENDPOINT = process.env.NEXT_PUBLIC_JSONBIN_ENDPOINT;
-const JSONBIN_SECRET = process.env.NEXT_PUBLIC_JSONBIN_SECRET;
+const STORAGE_VERIFIED = "usuario_verified";
+const STORAGE_DATE = "usuario_verified_date";
 
 const COLETAS_CONDOMINIO = { days: [1, 3, 5], startHour: 18 };
 const OFFICIAL_PERIODS = [
@@ -28,134 +28,58 @@ function mustBeOpen() {
   return cond || off;
 }
 
-// Função para buscar dados do JSONBin
-async function getJsonBinData() {
-  try {
-    const response = await fetch(JSONBIN_ENDPOINT, {
-      method: "GET",
-      headers: {
-        "X-Master-Key": JSONBIN_SECRET
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to fetch data');
-    }
-    
-    const data = await response.json();
-    return data.record || { date: null, confirmed: [], hasVerified: [] };
-  } catch (error) {
-    console.error('Erro ao buscar dados:', error);
-    return { date: null, confirmed: [], hasVerified: [] };
-  }
-}
-
-// Função para salvar dados no JSONBin
-async function saveJsonBinData(data) {
-  try {
-    await fetch(JSONBIN_ENDPOINT, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Master-Key": JSONBIN_SECRET
-      },
-      body: JSON.stringify(data)
-    });
-  } catch (error) {
-    console.error('Erro ao salvar dados:', error);
-  }
-}
-
-// Função para buscar lista de confirmados
-async function getConfirmados() {
-  const data = await getJsonBinData();
-  return data.confirmed || [];
-}
-
-// Função para adicionar confirmação
-async function adicionarConfirmacao({ name, id }) {
-  const data = await getJsonBinData();
-  const lista = data.confirmed || [];
-  
-  if (lista.find(p => p.id === id)) return;
-
-  const novaLista = [...lista, { name, id }];
-  const hasVerifiedList = data.hasVerified || [];
-  
-  const newData = {
-    date: data.date,
-    confirmed: novaLista,
-    hasVerified: hasVerifiedList.includes(id) ? hasVerifiedList : [...hasVerifiedList, id]
-  };
-  
-  await saveJsonBinData(newData);
-}
-
-// Função para verificar se usuário já confirmou hoje
-async function hasUserVerifiedToday(userId) {
-  const data = await getJsonBinData();
-  return (data.hasVerified || []).includes(userId);
-}
-
-// Função para resetar dados diários se necessário
-async function checkAndResetDailyData() {
-  const today = new Date().toISOString().split("T")[0];
-  const data = await getJsonBinData();
-  
-  if (data.date !== today) {
-    const newData = {
-      date: today,
-      confirmed: [],
-      hasVerified: []
-    };
-    await saveJsonBinData(newData);
-    return newData;
-  }
-  
-  return data;
-}
-
 export default function Home() {
   const [user, setUser] = useState(null);
   const [name, setName] = useState("");
   const [open, setOpen] = useState(false);
   const [verified, setVerified] = useState(false);
-  const [verifiedList, setVerifiedList] = useState([]);
+  const [confirmedUsers, setConfirmedUsers] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Função para carregar usuários que confirmaram hoje
+  const loadConfirmedUsers = async () => {
+    try {
+      const response = await fetch('/api/save');
+      if (response.ok) {
+        const confirmations = await response.json(); // Array de objetos
+        
+        if (Array.isArray(confirmations) && confirmations.length > 0) {
+          const userNames = confirmations.map(confirmation => 
+            confirmation.user.split(':')[0] // Objeto.user.split
+          );
+          setConfirmedUsers(userNames);
+        } else {
+          setConfirmedUsers([]);
+        }
+      }
+    } catch (error) {
+      console.log('Erro ao carregar usuários confirmados:', error);
+      setConfirmedUsers([]);
+    }
+  };
+
   useEffect(() => {
-    async function loadData() {
-      // Carrega usuário do localStorage
-      const data = localStorage.getItem(STORAGE_KEY);
-      let currentUser = null;
-      
-      if (data) {
-        try {
-          const u = JSON.parse(data);
-          if (u.name && u.id) {
-            setUser(u);
-            currentUser = u;
-          }
-        } catch {}
-      }
-
-      // Verifica e reseta dados diários se necessário
-      const jsonBinData = await checkAndResetDailyData();
-      
-      // Carrega lista de confirmados
-      setVerifiedList(jsonBinData.confirmed || []);
-      
-      // Verifica se usuário atual já confirmou hoje
-      if (currentUser) {
-        const userVerified = await hasUserVerifiedToday(currentUser.id);
-        setVerified(userVerified);
-      }
-
-      setOpen(mustBeOpen());
-      setLoading(false);
+    const data = localStorage.getItem(STORAGE_KEY);
+    if (data) {
+      try {
+        const u = JSON.parse(data);
+        if (u.name && u.id) setUser(u);
+      } catch {}
     }
 
-    loadData();
+    const today = new Date().toISOString().split("T")[0];
+    const vDate = localStorage.getItem(STORAGE_DATE);
+    if (vDate !== today) {
+      localStorage.setItem(STORAGE_VERIFIED, "false");
+      localStorage.setItem(STORAGE_DATE, today);
+    }
+    const v = localStorage.getItem(STORAGE_VERIFIED) === "true";
+    setVerified(v);
+
+    setOpen(mustBeOpen());
+    
+    // Carrega usuários que confirmaram
+    loadConfirmedUsers().finally(() => setLoading(false));
   }, []);
 
   const saveUser = () => {
@@ -166,28 +90,43 @@ export default function Home() {
     setOpen(mustBeOpen());
   };
 
-  const markVerified = async () => {
-    if (!user) return;
-    
-    setVerified(true);
-    
-    // Adiciona confirmação no JSONBin
-    await adicionarConfirmacao({ name: user.name, id: user.id });
-    
-    // Atualiza lista local
-    const exists = verifiedList.find(v => v.id === user.id);
-    if (!exists) {
-      setVerifiedList(prev => [...prev, { name: user.name, id: user.id }]);
-    }
-  };
+const markVerified = async () => {
+  // Salva localmente primeiro
+  localStorage.setItem(STORAGE_VERIFIED, "true");
+  setVerified(true);
 
-  if (loading) {
-    return (
-      <main className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Carregando...</div>
-      </main>
-    );
+  // Salva no arquivo do servidor
+  try {
+    const response = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        verified: true, 
+        timestamp: new Date().toISOString(),
+        user: `${user.name}:${user.id}`
+      })
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      console.log('Salvo no arquivo!');
+      
+      // Atualiza a lista com os dados retornados da API
+      if (result.confirmations && Array.isArray(result.confirmations)) {
+        const userNames = result.confirmations.map(confirmation => 
+          confirmation.user.split(':')[0]
+        );
+        setConfirmedUsers(userNames);
+      }
+    }
+  } catch (error) {
+    console.log('Erro ao salvar no arquivo:', error);
+    // Fallback: adiciona na lista local se a API falhou
+    if (user && !confirmedUsers.includes(user.name)) {
+      setConfirmedUsers(prev => [...prev, user.name]);
+    }
   }
+}
 
   if (!user) {
     return (
@@ -216,49 +155,50 @@ export default function Home() {
   const msg = open ? msgOpen : msgClosed;
 
   return (
-    <main className={`${bg} min-h-screen flex flex-col items-center justify-center p-8 text-center font-sans`}>
-      <h1 className={`${text} text-3xl font-extrabold mb-6 tracking-tight`}>{msg}</h1>
-      {!verified ? (
-        <button
-          className={`px-6 py-3 rounded shadow-md transition-colors duration-300 ${
-            open
-              ? "bg-red-700 hover:bg-red-800 focus:ring-red-500"
-              : "bg-green-700 hover:bg-green-800 focus:ring-green-500"
-          } text-white focus:outline-none focus:ring-2 focus:ring-offset-2`}
-          onClick={markVerified}
-        >
-          {open ? "Marcar que está aberta" : "Marcar que está fechada"}
-        </button>
-      ) : (
-        <p className={`${text} text-lg mt-6 font-medium`}>
-          Você já confirmou que a lixeira está <strong>{open ? "aberta" : "fechada"}</strong> hoje.
-        </p>
-      )}
+<main className={`${bg} min-h-screen flex flex-col items-center justify-center p-8 text-center`}>
+  <h1 className={`${text} text-3xl font-bold mb-4`}>{msg}</h1>
+  
+  {!verified ? (
+    <button
+      className={`px-6 py-3 rounded ${open ? "bg-red-600" : "bg-green-600"} text-white`}
+      onClick={markVerified}
+    >
+      {open ? "Marcar que está aberta" : "Marcar que está fechada"}
+    </button>
+  ) : (
+    <p className={`${text} text-lg mt-4`}>
+      Você já confirmou que a lixeira está <strong>{open ? "aberta" : "fechada"}</strong> hoje.
+    </p>
+  )}
 
-      <section className="mt-10 max-w-md w-full text-left bg-white rounded-lg shadow-lg p-6 border border-gray-200">
-        <h2 className="text-2xl font-semibold mb-4 text-gray-900 border-b border-gray-300 pb-2">
-          Quem já confirmou que a lixeira está fechada:
-        </h2>
-        {verifiedList.length === 0 ? (
-          <p className="text-gray-500 italic">Nenhuma confirmação ainda.</p>
-        ) : (
-          <ul className="list-disc list-inside space-y-2 text-gray-800 font-semibold">
-            {verifiedList.map(({ id, name }) => (
-              <li key={id} className="hover:text-green-600 transition-colors cursor-default">
-                {name}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+  {/* Lista de usuários que confirmaram hoje */}
+  <section className="mt-8 max-w-md w-full text-left bg-white rounded-lg shadow-lg p-6 border border-gray-200">
+    <h2 className="text-xl font-semibold mb-4 text-gray-900 border-b border-gray-300 pb-2">
+      Quem já confirmou hoje:
+    </h2>
+    {loading ? (
+      <p className="text-gray-500 italic">Carregando...</p>
+    ) : confirmedUsers.length === 0 ? (
+      <p className="text-gray-500 italic">Nenhuma confirmação ainda.</p>
+    ) : (
+      <ul className="list-disc list-inside space-y-2 text-gray-800">
+        {confirmedUsers.map((userName, index) => (
+          <li key={index} className="hover:text-green-600 transition-colors">
+            {userName}
+          </li>
+        ))}
+      </ul>
+    )}
+  </section>
 
-      <p className="text-gray-700 mt-10 text-lg font-normal">
-        Olá, <strong className="text-indigo-700">{user.name}</strong>! Seu ID: <strong className="text-indigo-700">{user.id}</strong>
-      </p>
-      <footer className="mt-10 text-sm text-gray-500 max-w-md leading-relaxed">
-        Coleta oficial em Guaíra: Segunda a Sexta, das 07:30–12:00 e 13:30–17:00.<br />
-        Condominial: Seg, Qua e Sex após 18h. Só levar o lixo nestes horários.
-      </footer>
-    </main>
+  <p className="text-lg text-gray-700 mt-6">
+    Olá, <strong>{user.name}</strong>! Seu ID: <strong>{user.id}</strong>
+  </p>
+  
+  <footer className="mt-6 text-sm text-gray-600 max-w-md">
+    Coleta oficial em Guaíra: Segunda a Sexta, das 07:30–12:00 e 13:30–17:00.<br/>
+    Condominial: Seg, Qua e Sex após 18h. Só levar o lixo nestes horários.
+  </footer>
+</main>
   );
 }
