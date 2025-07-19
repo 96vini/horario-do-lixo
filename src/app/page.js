@@ -1,13 +1,11 @@
 "use client";
 
-// pages/index.js
 import { useEffect, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 
 const STORAGE_KEY = "usuario_info";
-const STORAGE_VERIFIED = "usuario_verified";
-const STORAGE_DATE = "usuario_verified_date";
-const STORAGE_VERIFIED_LIST = "usuario_verified_list"; // nova chave para lista
+const JSONBIN_ENDPOINT = process.env.NEXT_PUBLIC_JSONBIN_ENDPOINT;
+const JSONBIN_SECRET = process.env.NEXT_PUBLIC_JSONBIN_SECRET;
 
 const COLETAS_CONDOMINIO = { days: [1, 3, 5], startHour: 18 };
 const OFFICIAL_PERIODS = [
@@ -30,45 +28,134 @@ function mustBeOpen() {
   return cond || off;
 }
 
+// Função para buscar dados do JSONBin
+async function getJsonBinData() {
+  try {
+    const response = await fetch(JSONBIN_ENDPOINT, {
+      method: "GET",
+      headers: {
+        "X-Master-Key": JSONBIN_SECRET
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch data');
+    }
+    
+    const data = await response.json();
+    return data.record || { date: null, confirmed: [], hasVerified: [] };
+  } catch (error) {
+    console.error('Erro ao buscar dados:', error);
+    return { date: null, confirmed: [], hasVerified: [] };
+  }
+}
+
+// Função para salvar dados no JSONBin
+async function saveJsonBinData(data) {
+  try {
+    await fetch(JSONBIN_ENDPOINT, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Master-Key": JSONBIN_SECRET
+      },
+      body: JSON.stringify(data)
+    });
+  } catch (error) {
+    console.error('Erro ao salvar dados:', error);
+  }
+}
+
+// Função para buscar lista de confirmados
+async function getConfirmados() {
+  const data = await getJsonBinData();
+  return data.confirmed || [];
+}
+
+// Função para adicionar confirmação
+async function adicionarConfirmacao({ name, id }) {
+  const data = await getJsonBinData();
+  const lista = data.confirmed || [];
+  
+  if (lista.find(p => p.id === id)) return;
+
+  const novaLista = [...lista, { name, id }];
+  const hasVerifiedList = data.hasVerified || [];
+  
+  const newData = {
+    date: data.date,
+    confirmed: novaLista,
+    hasVerified: hasVerifiedList.includes(id) ? hasVerifiedList : [...hasVerifiedList, id]
+  };
+  
+  await saveJsonBinData(newData);
+}
+
+// Função para verificar se usuário já confirmou hoje
+async function hasUserVerifiedToday(userId) {
+  const data = await getJsonBinData();
+  return (data.hasVerified || []).includes(userId);
+}
+
+// Função para resetar dados diários se necessário
+async function checkAndResetDailyData() {
+  const today = new Date().toISOString().split("T")[0];
+  const data = await getJsonBinData();
+  
+  if (data.date !== today) {
+    const newData = {
+      date: today,
+      confirmed: [],
+      hasVerified: []
+    };
+    await saveJsonBinData(newData);
+    return newData;
+  }
+  
+  return data;
+}
+
 export default function Home() {
   const [user, setUser] = useState(null);
   const [name, setName] = useState("");
   const [open, setOpen] = useState(false);
   const [verified, setVerified] = useState(false);
   const [verifiedList, setVerifiedList] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const data = localStorage.getItem(STORAGE_KEY);
-    if (data) {
-      try {
-        const u = JSON.parse(data);
-        if (u.name && u.id) setUser(u);
-      } catch {}
-    }
-
-    const today = new Date().toISOString().split("T")[0];
-    const vDate = localStorage.getItem(STORAGE_DATE);
-    if (vDate !== today) {
-      localStorage.setItem(STORAGE_VERIFIED, "false");
-      localStorage.setItem(STORAGE_DATE, today);
-      localStorage.setItem(STORAGE_VERIFIED_LIST, JSON.stringify([])); // limpa lista todo dia
-    }
-
-    const v = localStorage.getItem(STORAGE_VERIFIED) === "true";
-    setVerified(v);
-
-    const listRaw = localStorage.getItem(STORAGE_VERIFIED_LIST);
-    if (listRaw) {
-      try {
-        setVerifiedList(JSON.parse(listRaw));
-      } catch {
-        setVerifiedList([]);
+    async function loadData() {
+      // Carrega usuário do localStorage
+      const data = localStorage.getItem(STORAGE_KEY);
+      let currentUser = null;
+      
+      if (data) {
+        try {
+          const u = JSON.parse(data);
+          if (u.name && u.id) {
+            setUser(u);
+            currentUser = u;
+          }
+        } catch {}
       }
-    } else {
-      setVerifiedList([]);
+
+      // Verifica e reseta dados diários se necessário
+      const jsonBinData = await checkAndResetDailyData();
+      
+      // Carrega lista de confirmados
+      setVerifiedList(jsonBinData.confirmed || []);
+      
+      // Verifica se usuário atual já confirmou hoje
+      if (currentUser) {
+        const userVerified = await hasUserVerifiedToday(currentUser.id);
+        setVerified(userVerified);
+      }
+
+      setOpen(mustBeOpen());
+      setLoading(false);
     }
 
-    setOpen(mustBeOpen());
+    loadData();
   }, []);
 
   const saveUser = () => {
@@ -79,20 +166,28 @@ export default function Home() {
     setOpen(mustBeOpen());
   };
 
-  const markVerified = () => {
-    localStorage.setItem(STORAGE_VERIFIED, "true");
+  const markVerified = async () => {
+    if (!user) return;
+    
     setVerified(true);
-
-    // adiciona usuário à lista, se ainda não tiver
-    if (user) {
-      const exists = verifiedList.find(v => v.id === user.id);
-      if (!exists) {
-        const newList = [...verifiedList, { name: user.name, id: user.id }];
-        localStorage.setItem(STORAGE_VERIFIED_LIST, JSON.stringify(newList));
-        setVerifiedList(newList);
-      }
+    
+    // Adiciona confirmação no JSONBin
+    await adicionarConfirmacao({ name: user.name, id: user.id });
+    
+    // Atualiza lista local
+    const exists = verifiedList.find(v => v.id === user.id);
+    if (!exists) {
+      setVerifiedList(prev => [...prev, { name: user.name, id: user.id }]);
     }
   };
+
+  if (loading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center">
+        <div className="text-lg">Carregando...</div>
+      </main>
+    );
+  }
 
   if (!user) {
     return (
