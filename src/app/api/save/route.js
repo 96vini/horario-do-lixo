@@ -1,63 +1,35 @@
-import fs from 'fs';
-import path from 'path';
 import { NextResponse } from 'next/server';
-
-const DATA_FILE = path.join(process.cwd(), 'data', 'dados.json');
+import { getDB } from '@/lib/db';
 
 export async function POST(request) {
   try {
-    const newConfirmation = await request.json();
-    const today = new Date().toISOString().split("T")[0];
+    const { user } = await request.json();
+    const [userName, userId] = user.split(':');
+    const today = new Date().toISOString().split('T')[0];
     
-    // Cria diretório se não existir
-    const dir = path.dirname(DATA_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    // LÊ OS DADOS EXISTENTES PRIMEIRO
-    let fileData = { date: today, confirmations: [] };
+    const db = getDB();
     
-    if (fs.existsSync(DATA_FILE)) {
-      try {
-        const fileContent = fs.readFileSync(DATA_FILE, 'utf8');
-        const parsedData = JSON.parse(fileContent);
-        
-        // Se é do mesmo dia, mantém dados existentes
-        if (parsedData.date === today && Array.isArray(parsedData.confirmations)) {
-          fileData = parsedData;
-        }
-        // Se é dia diferente, reseta mas mantém a estrutura
-        else {
-          fileData = { date: today, confirmations: [] };
-        }
-      } catch (parseError) {
-        console.log('Erro ao parsear arquivo, criando novo:', parseError);
-        fileData = { date: today, confirmations: [] };
-      }
-    }
-
-    // Verifica se usuário já confirmou hoje (evita duplicatas)
-    const userName = newConfirmation.user.split(':')[0];
-    const userExists = fileData.confirmations.some(conf => 
-      conf.user.split(':')[0] === userName
-    );
+    // Tenta inserir (IGNORE se já existe)
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO confirmacoes (user_name, user_id, created_at) 
+      VALUES (?, ?, ?)
+    `);
     
-    // ADICIONA NOVA CONFIRMAÇÃO SE NÃO EXISTIR
-    if (!userExists) {
-      fileData.confirmations.push(newConfirmation);
-      console.log(`Adicionando confirmação de: ${userName}`);
-    } else {
-      console.log(`Usuário ${userName} já confirmou hoje`);
-    }
-
-    // SALVA A ESTRUTURA COMPLETA
-    fs.writeFileSync(DATA_FILE, JSON.stringify(fileData, null, 2));
+    const result = stmt.run(userName, userId, today);
     
-    return NextResponse.json({ 
-      success: true, 
-      confirmations: fileData.confirmations,
-      total: fileData.confirmations.length
+    // Busca todas confirmações de hoje
+    const todayConfirmations = db.prepare(`
+      SELECT user_name FROM confirmacoes 
+      WHERE created_at = ? 
+      ORDER BY timestamp
+    `).all(today);
+    
+    db.close();
+    
+    return NextResponse.json({
+      success: true,
+      added: result.changes > 0,
+      confirmations: todayConfirmations.map(row => ({ user: `${row.user_name}:` }))
     });
   } catch (error) {
     console.error('Erro ao salvar:', error);
@@ -66,31 +38,60 @@ export async function POST(request) {
 }
 
 export async function GET() {
-  const today = new Date().toISOString().split("T")[0];
-  
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      const data = fs.readFileSync(DATA_FILE, 'utf8');
-      const parsedData = JSON.parse(data);
-      
-      console.log('Arquivo lido:', parsedData);
-      
-      // Se é do dia atual e tem a estrutura correta
-      if (parsedData.date === today && Array.isArray(parsedData.confirmations)) {
-        console.log(`Retornando ${parsedData.confirmations.length} confirmações de hoje`);
-        return NextResponse.json(parsedData.confirmations);
-      }
-      
-      // Se é dia diferente ou estrutura inválida
-      console.log('Data diferente ou estrutura inválida, retornando array vazio');
-      return NextResponse.json([]);
-    }
+    const today = new Date().toISOString().split('T')[0];
+    const db = getDB();
     
-    // Se arquivo não existe
-    console.log('Arquivo não existe, retornando array vazio');
-    return NextResponse.json([]);
+    const confirmations = db.prepare(`
+      SELECT user_name, user_id FROM confirmacoes 
+      WHERE created_at = ? 
+      ORDER BY timestamp
+    `).all(today);
+    
+    db.close();
+    
+    // Retorna no formato que o frontend espera
+    const formattedData = confirmations.map(row => ({
+      user: `${row.user_name}:${row.user_id}`,
+      verified: true,
+      timestamp: new Date().toISOString()
+    }));
+    
+    return NextResponse.json(formattedData);
   } catch (error) {
-    console.error('Erro ao ler arquivo:', error);
+    console.error('Erro ao ler:', error);
     return NextResponse.json([]);
   }
 }
+
+// Frontend permanece o mesmo!
+// Só precisa ajustar o markVerified:
+
+const markVerified = async () => {
+  localStorage.setItem(STORAGE_VERIFIED, "true");
+  setVerified(true);
+
+  if (user && !confirmedUsers.includes(user.name)) {
+    setConfirmedUsers(prev => [...prev, user.name]);
+  }
+
+  try {
+    const response = await fetch('/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        user: `${user.name}:${user.id}`
+      })
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      console.log('Salvo no banco!', result);
+      
+      // Recarrega lista atualizada
+      await loadConfirmedUsers();
+    }
+  } catch (error) {
+    console.log('Erro ao salvar:', error);
+  }
+};
