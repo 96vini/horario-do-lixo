@@ -197,7 +197,7 @@ export default function Home() {
 
           <div className="space-y-4">
             <input
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all duration-200 text-center text-lg placeholder-gray-400"
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-100 transition-all duration-200 text-center text-lg placeholder-gray-400 text-gray-900"
               placeholder="Seu nome completo"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -239,7 +239,7 @@ export default function Home() {
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-gray-800">Olá, {user.name}! 👋</h2>
-                <p className="text-gray-500 text-sm">ID: {user.id.slice(0, 8)}...</p>
+                <p className="text-gray-900 text-sm">ID: {user.id.slice(0, 8)}...</p>
               </div>
             </div>
             <div className="bg-gray-100 px-3 py-1 rounded-full text-sm text-gray-600 font-medium">
@@ -294,7 +294,7 @@ export default function Home() {
           ) : confirmedUsers.length === 0 ? (
             <div className="text-center py-8">
               <div className="text-6xl mb-4">📭</div>
-              <p className="text-gray-500 text-lg font-medium">Nenhuma confirmação ainda</p>
+              <p className="text-gray-900 text-lg font-medium">Nenhuma confirmação ainda</p>
               <p className="text-gray-400">Seja o primeiro a confirmar hoje!</p>
             </div>
           ) : (
